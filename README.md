@@ -39,7 +39,6 @@ report has been accepted.
 Keep the API key out of shell history:
 
 ```bash
-cd tools/audit
 read -rsp "Shuffle audit API key: " SHUFFLE_AUDIT_API_KEY
 export SHUFFLE_AUDIT_API_KEY
 echo
