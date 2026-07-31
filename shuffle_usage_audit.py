@@ -1010,7 +1010,6 @@ def collect_org_metrics(
             "environment_count": environment_count,
             "monthly_app_runs": monthly_app_runs,
             "monthly_app_runs_by_month": monthly_app_runs_by_month,
-            "stats_org_name": str(live_stats.get("org_name") or "").strip(),
         },
         warnings,
     )
@@ -1019,18 +1018,13 @@ def collect_org_metrics(
 def organization_inventory(
     selected_org_ids: Sequence[str],
     parent_by_org_id: Mapping[str, Optional[str]],
-    orgs: Mapping[str, Mapping[str, Any]],
 ) -> List[Dict[str, Any]]:
     organizations: List[Dict[str, Any]] = []
     for org_id in selected_org_ids:
-        parent_id = parent_by_org_id.get(org_id)
-        parent = orgs.get(parent_id, {}) if parent_id else {}
         organizations.append(
             {
                 "org_id": org_id,
-                "org_name": str(orgs.get(org_id, {}).get("name") or ""),
-                "parent_org_id": parent_id,
-                "parent_org_name": str(parent.get("name") or "") if parent_id else None,
+                "parent_org_id": parent_by_org_id.get(org_id),
             }
         )
     return organizations
@@ -1073,17 +1067,15 @@ def collect_audit(
                 opensearch=opensearch,
             )
             metrics_by_org[org_id] = org_metrics
-            if not orgs.get(org_id, {}).get("name") and org_metrics["stats_org_name"]:
-                orgs[org_id]["name"] = org_metrics["stats_org_name"]
-            warnings.extend(f"{org_name}: {warning}" for warning in org_warnings)
+            warnings.extend(f"{org_id}: {warning}" for warning in org_warnings)
         except AuditError as exc:
-            error = f"{org_name} ({org_id}): {exc}"
+            error = f"{org_id}: {exc}"
             if not allow_partial:
                 raise AuditError(error) from exc
             errors.append(error)
 
     complete = not errors
-    organizations = organization_inventory(selected_org_ids, parent_by_org_id, orgs)
+    organizations = organization_inventory(selected_org_ids, parent_by_org_id)
     known_metrics = list(metrics_by_org.values())
     workflow_count = sum(metric["workflow_count"] for metric in known_metrics)
     action_count = sum(metric["action_count"] for metric in known_metrics)
@@ -1102,33 +1094,26 @@ def collect_audit(
     monthly_runs_per_org: List[Dict[str, Any]] = []
     per_org: List[Dict[str, Any]] = []
     for org_id in selected_org_ids:
-        org = orgs.get(org_id, {})
-        org_name = str(org.get("name") or "")
         parent_id = parent_by_org_id.get(org_id)
-        parent_name = str(orgs.get(parent_id, {}).get("name") or "") if parent_id else None
         org_metrics = metrics_by_org.get(org_id)
         workflow_value = org_metrics["workflow_count"] if org_metrics else None
         monthly_value = org_metrics["monthly_app_runs"] if org_metrics else None
         workflows_per_org.append(
             {
                 "org_id": org_id,
-                "org_name": org_name,
                 "workflow_count": workflow_value,
             }
         )
         monthly_runs_per_org.append(
             {
                 "org_id": org_id,
-                "org_name": org_name,
                 "monthly_app_runs": monthly_value,
             }
         )
         per_org.append(
             {
                 "org_id": org_id,
-                "org_name": org_name,
                 "parent_org_id": parent_id,
-                "parent_org_name": parent_name,
                 "environment_count": (
                     org_metrics["environment_count"] if org_metrics else None
                 ),
@@ -1178,7 +1163,6 @@ def collect_audit(
             per_org_month.append(
                 {
                     "org_id": org_id,
-                    "org_name": str(orgs.get(org_id, {}).get("name") or ""),
                     "monthly_app_runs": value,
                 }
             )
@@ -1282,7 +1266,8 @@ def collect_audit(
                 "parent child counters are excluded to prevent double-counting"
             ),
             "data_handling": (
-                "org names/IDs and aggregate usage metrics are written; workflow "
+                "org IDs and aggregate usage metrics are written; organization "
+                "names, workflow "
                 "names/IDs/content, environment names/IDs, API credentials, and raw "
                 "API responses are not written"
             ),
@@ -1325,18 +1310,16 @@ def markdown_report(report: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-        "## Per-org Metrics",
-        "",
-        "| Org Name | Org ID | Parent Org | Environments | Workflows | Actions | Nodes | Avg Actions / Workflow | Avg Nodes / Workflow | Monthly App Runs |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "## Per-org Metrics",
+            "",
+            "| Org ID | Parent Org ID | Environments | Workflows | Actions | Nodes | Avg Actions / Workflow | Avg Nodes / Workflow | Monthly App Runs |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for org in metrics["per_org"]:
-        parent = org["parent_org_name"] or "—"
-        if org["parent_org_id"]:
-            parent = f"{parent} (`{org['parent_org_id']}`)"
+        parent = f"`{org['parent_org_id']}`" if org["parent_org_id"] else "—"
         lines.append(
-            f"| {org['org_name']} | `{org['org_id']}` | {parent} | "
+            f"| `{org['org_id']}` | {parent} | "
             f"{org['environment_count'] if org['environment_count'] is not None else 'unknown'} | "
             f"{org['workflow_count'] if org['workflow_count'] is not None else 'unknown'} | "
             f"{org['action_count'] if org['action_count'] is not None else 'unknown'} | "
@@ -1351,7 +1334,7 @@ def markdown_report(report: Mapping[str, Any]) -> str:
             "",
             "## Monthly App Runs — All Available Months",
             "",
-            "| Month | Organization | App Runs | Source |",
+            "| Month | Org ID | App Runs | Source |",
             "| --- | --- | ---: | --- |",
         ]
     )
@@ -1359,8 +1342,7 @@ def markdown_report(report: Mapping[str, Any]) -> str:
         for org in month_entry["per_org"]:
             value = org["monthly_app_runs"]
             lines.append(
-                f"| {month_entry['month']} | {org['org_name']} "
-                f"(`{org['org_id']}`) | "
+                f"| {month_entry['month']} | `{org['org_id']}` | "
                 f"{value if value is not None else 'unknown'} | "
                 f"{month_entry['source']} |"
             )
@@ -1370,7 +1352,7 @@ def markdown_report(report: Mapping[str, Any]) -> str:
             "",
             "## Methodology",
             "",
-            "- Organizations are listed by their Shuffle names and IDs.",
+            "- Organizations are listed by Shuffle org ID only.",
             "- Environments are non-archived environments returned for each tenant.",
             "- Actions are workflow action entries; nodes are actions plus triggers.",
             "- Current-month App Runs use each tenant's direct monthly counter. Prior "
