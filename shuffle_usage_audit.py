@@ -362,16 +362,45 @@ class OpenSearchClient(ResilientJsonClient):
 
     def get_document(self, base_index: str, document_id: str) -> Mapping[str, Any]:
         index = urllib.parse.quote(self.index_name(base_index), safe="-_.")
-        document = urllib.parse.quote(document_id, safe="")
         response = self.request_path(
-            f"/{index}/_doc/{document}",
-            method="GET",
+            f"/{index}/_search",
+            method="POST",
+            payload={
+                "size": 1,
+                "track_total_hits": True,
+                "query": {"ids": {"values": [document_id]}},
+                # Rollover aliases can contain an older copy of the same ID.
+                # Shuffle's rollover indexes are zero-padded, so descending
+                # index order selects the newest backing index deterministically.
+                "sort": [{"_index": {"order": "desc"}}],
+            },
         )
-        if not isinstance(response, Mapping) or response.get("found") is False:
+        if not isinstance(response, Mapping):
+            raise AuditError(
+                f"OpenSearch search for {base_index}/{document_id} "
+                "returned an invalid response"
+            )
+        hits_wrapper = response.get("hits")
+        if not isinstance(hits_wrapper, Mapping):
+            raise AuditError(
+                f"OpenSearch search for {base_index}/{document_id} had no hits object"
+            )
+        hits = hits_wrapper.get("hits")
+        if not isinstance(hits, list):
+            raise AuditError(
+                f"OpenSearch search for {base_index}/{document_id} had no hits list"
+            )
+        if not hits:
             raise AuditError(
                 f"OpenSearch document {base_index}/{document_id} was not found"
             )
-        source = response.get("_source")
+        hit = hits[0]
+        if not isinstance(hit, Mapping):
+            raise AuditError(
+                f"OpenSearch search for {base_index}/{document_id} "
+                "returned an invalid hit"
+            )
+        source = hit.get("_source")
         if not isinstance(source, Mapping):
             raise AuditError(
                 f"OpenSearch document {base_index}/{document_id} had no _source"
@@ -395,13 +424,16 @@ class OpenSearchClient(ResilientJsonClient):
                 "track_total_hits": True,
                 "query": query,
                 "_source": list(source_fields),
-                "sort": ["_doc"],
+                # Read newer rollover indexes first so duplicate document IDs
+                # resolve to the latest backing index.
+                "sort": [{"_index": {"order": "desc"}}, "_doc"],
             },
         )
 
         scroll_id = ""
         expected_total: Optional[int] = None
         received_total = 0
+        seen_document_ids: set[str] = set()
         try:
             while True:
                 if not isinstance(response, Mapping):
@@ -459,6 +491,9 @@ class OpenSearchClient(ResilientJsonClient):
                             "OpenSearch pagination returned more documents than "
                             f"its exact total of {expected_total}"
                         )
+                    if hit_id in seen_document_ids:
+                        continue
+                    seen_document_ids.add(hit_id)
                     yield source
 
                 if not scroll_id:
