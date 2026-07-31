@@ -589,6 +589,46 @@ class UtilityTests(unittest.TestCase):
         )
         self.assertEqual(client.retry_count, 1)
 
+    def test_opensearch_index_prefix_matches_shuffle_naming(self):
+        client = audit.OpenSearchClient(
+            "https://search.example.com:9200",
+            index_prefix="Customer_One_",
+        )
+
+        self.assertEqual(client.index_name("workflow"), "customer_one__workflow")
+        self.assertEqual(
+            client.index_name("environments"),
+            "customer_one__environments",
+        )
+        self.assertEqual(
+            client.index_name("org_statistics"),
+            "customer_one__org_statistics",
+        )
+
+    def test_shuffle_opensearch_prefix_environment_is_supported(self):
+        with mock.patch.dict(
+            audit.os.environ,
+            {"SHUFFLE_OPENSEARCH_INDEX_PREFIX": "customer_one"},
+            clear=True,
+        ):
+            self.assertEqual(
+                audit.parse_args(["--all-visible-orgs"]).opensearch_index_prefix,
+                "customer_one",
+            )
+
+        with mock.patch.dict(
+            audit.os.environ,
+            {
+                "SHUFFLE_OPENSEARCH_INDEX_PREFIX": "shuffle_value",
+                "SHUFFLE_AUDIT_OPENSEARCH_INDEX_PREFIX": "audit_value",
+            },
+            clear=True,
+        ):
+            self.assertEqual(
+                audit.parse_args(["--all-visible-orgs"]).opensearch_index_prefix,
+                "audit_value",
+            )
+
     def test_backend_url_defaults_to_local_shuffle(self):
         self.assertEqual(
             audit.DEFAULT_SHUFFLE_BASE_URL,

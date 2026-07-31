@@ -307,7 +307,9 @@ class OpenSearchClient(ResilientJsonClient):
 
         self.base_urls = tuple(parsed_urls)
         self.base_url = self.base_urls[0]
-        self.index_prefix = index_prefix.strip().lower().rstrip("_")
+        # Match Shuffle's GetESIndexPrefix behavior: preserve the configured
+        # prefix, add one underscore, then lowercase the complete index name.
+        self.index_prefix = index_prefix.strip()
         self.page_size = page_size
         self.headers = {
             "Accept": "application/json",
@@ -329,11 +331,12 @@ class OpenSearchClient(ResilientJsonClient):
         )
 
     def index_name(self, base_name: str) -> str:
-        return (
-            f"{self.index_prefix}_{base_name.lower()}"
+        index = (
+            f"{self.index_prefix}_{base_name}"
             if self.index_prefix
-            else base_name.lower()
+            else base_name
         )
+        return index.lower()
 
     def request_path(
         self,

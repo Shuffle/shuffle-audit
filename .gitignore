@@ -1,3 +1,4 @@
-*.md
 *.json
-__pycache__
+shuffle-usage-audit*.md
+shuffle-usage-audit*.age
+__pycache__/

@@ -82,12 +82,43 @@ This creates:
 Both files are written with owner-only (`0600`) permissions because they include
 customer org names and IDs. Review either file before sending it to Shuffle.
 
+### Protect and transfer reports
+
+The collector and visualizer source files do not need encryption. The generated
+JSON and Markdown reports contain customer-identifying names, IDs, and usage
+aggregates, so encrypt them before sending them off the audited machine or
+retaining them outside an encrypted customer-controlled disk.
+
+Do not add either plaintext report to Git. This repository ignores the default
+report filenames.
+
+Prefer recipient public-key encryption instead of sharing a report password.
+For example, with [`age`](https://age-encryption.org/):
+
+```bash
+tar -czf - shuffle-usage-audit.json shuffle-usage-audit.md \
+  | age --recipient "AGE_RECIPIENT_PUBLIC_KEY" \
+      --output shuffle-usage-audit.tar.gz.age
+```
+
+The recipient can decrypt and extract it with:
+
+```bash
+age --decrypt --identity /secure/path/to/age-key.txt \
+  shuffle-usage-audit.tar.gz.age | tar -xzf -
+```
+
+Keep the plaintext reports only as long as the customer and Shuffle require
+them, following the customer's retention and secure-deletion policy. Encryption
+does not replace using a temporary read-only audit account, revoking its API key
+afterward, or protecting any credential files with `0600` permissions.
+
 ## Visualize the report
 
 Start the private local dashboard after collecting the report:
 
 ```bash
-cd tools/audit
+cd shuffle-audit
 python3 visualize_audit.py shuffle-usage-audit.json
 ```
 
@@ -136,6 +167,15 @@ The collector also recognizes Shuffle's existing
 `SHUFFLE_OPENSEARCH_INDEX_PREFIX`, and
 `SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY` variables. Audit-specific variables take
 precedence.
+
+Index prefixes follow Shuffle's naming behavior exactly. For example,
+`SHUFFLE_OPENSEARCH_INDEX_PREFIX=customer_one` reads
+`customer_one_workflow`, `customer_one_environments`, and
+`customer_one_org_statistics`. You can also override it for the audit only:
+
+```bash
+export SHUFFLE_AUDIT_OPENSEARCH_INDEX_PREFIX="customer_one"
+```
 
 Use a protected key file instead of an environment variable if required:
 
@@ -258,7 +298,7 @@ map because replicated organizations would otherwise be double-counted.
 The tests use only in-memory fake API responses and do not contact a deployment:
 
 ```bash
-cd tools/audit
+cd shuffle-audit
 python3 -m unittest -v
 node --test viewer/test_app.js
 ```
